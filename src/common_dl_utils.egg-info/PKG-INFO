@@ -1,0 +1,14 @@
+Metadata-Version: 2.1
+Name: common_dl_utils
+Version: 0.0.1
+Summary: Utilities for common tasks in deep learning research, such as creating models from configs
+Author-email: Simon Martinus Koop <s.m.koop@tue.nl>
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+# common_dl_utils
+todo
