@@ -752,6 +752,7 @@ def get_model_from_config(
         model_sub_config_name_base:Union[None, str]=None,
         add_model_module_to_architecture_default_module:bool=False,
         additional_architecture_default_modules:Union[None, tuple[ModuleType], list[ModuleType], ModuleType]=None,
+        initialize:bool=True,
         )->object:
     """ 
     produce a model from a config dict
@@ -775,7 +776,8 @@ def get_model_from_config(
     :param add_model_module_to_architecture_default_module: if True, will add the model module to the default module specified by default_module_key
         NB in this case, the model_prompt should be a tuple or list of length 2, where the first element is the path to the model module
     :param additional_architecture_default_modules: optional additional modules to be added to the default module specified by default_module_key
-    :returns: an initialized model as specified by config and missing_kwargs
+    :param initialize: if True, initialize the model before returning it, otherwise return a PostponedInitialization instance
+    :returns: an initialized model as specified by config and missing_kwargs if initialize is True, else a PostponedInitialization instance
     """
     missing_kwargs = missing_kwargs or {}
     prompt = config[model_prompt]
@@ -801,4 +803,9 @@ def get_model_from_config(
         new_key_body=model_sub_config_name_base,
         new_key_base_from_param_name=sub_config_from_param_name
         )
-    return uninitialized_model.initialize(**missing_kwargs)
+    if missing_kwargs:
+        uninitialized_model.resolve_missing_args(missing_kwargs)
+    if initialize:
+        return uninitialized_model.initialize()
+    else:
+        return uninitialized_model
