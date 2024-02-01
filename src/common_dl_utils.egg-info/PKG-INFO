@@ -1,6 +1,6 @@
 Metadata-Version: 2.1
 Name: common_dl_utils
-Version: 0.0.2
+Version: 0.0.3
 Summary: Utilities for common tasks in deep learning research, such as creating models from configs
 Author-email: Simon Martinus Koop <s.m.koop@tue.nl>
 Classifier: Programming Language :: Python :: 3
