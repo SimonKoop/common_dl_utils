@@ -105,14 +105,17 @@ NB wherever it says class, typically any type of callable should work
 """
 
 import inspect
-from typing import Union, Callable, Any, get_origin
+from typing import Union, Callable, Any, get_origin, get_args
 #from collections.abc import Sequence
 from types import ModuleType
-from common_dl_utils.type_registry import type_registry, contains
+from common_dl_utils.type_registry import type_registry, contains, is_in_registry
 from common_dl_utils.module_loading import load_from_path, MultiModule
 from common_dl_utils.trees import get_from_index, has_index, tree_map
+import common_dl_utils._internal_utils as _internal_utils
 from collections.abc import Iterable
 from functools import partial
+import os
+import warnings
 
 __all__ = [
     'Prompt',
@@ -157,11 +160,15 @@ class PostponedInitialization:
     """ 
     to prevent unused models from being created in while looping over the keys in match_signature_from_config,
     we postpone initialization of classes based on kwargs until we are certain we need them
-    """
-    def __init__(self, cls:type, kwargs:dict, missing_args:Union[None, list]=None): 
+    """ # TODO handle VAR_POSITIONAL
+    def __init__(self, cls:type, kwargs:dict, missing_args:Union[None, list]=None, signature:inspect.Signature=None, prompt: Prompt=None, associated_parameter_name:Union[None, str]=None): 
         self.cls = cls 
+        self.signature = signature if signature is not None else inspect.signature(cls)
         self.kwargs = kwargs 
         self.missing_args=missing_args
+        self.needs_wrapping = any(param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.POSITIONAL_ONLY) for param in self.signature.parameters.values())
+        self.prompt=prompt  # so we know from what prompt this was
+        self.associated_parameter_name = associated_parameter_name
     
     def initialize(self, **kwargs):
         if self.missing_args and any(missing_arg not in kwargs for missing_arg in self.missing_args):
@@ -184,7 +191,8 @@ class PostponedInitialization:
             is_leaf = lambda x: isinstance(x, PostponedInitialization) 
         )
         processed_self_kwargs.update(processed_kwargs)
-        return self.cls(**processed_self_kwargs)
+        cls = _internal_utils.signature_to_var_keyword(self.cls, self.signature) if self.needs_wrapping else self.cls
+        return cls(**processed_self_kwargs)
     
     def __repr__(self) -> str:
         return f"PostponedInitialization(cls={self.cls.__name__}, kwargs={self.kwargs}, missing_args={self.missing_args})"
@@ -198,10 +206,16 @@ class PostponedInitialization:
             resolution = resolution.kwargs
         if not self.missing_args:
             return None
-        for arg_name in resolution.kwargs:
+        for arg_name in resolution:  # resolution is now a dict
             if arg_name in self.missing_args:
                 self.missing_args.remove(arg_name)
-                self.kwargs[arg_name] = resolution.kwargs[arg_name]
+                self.kwargs[arg_name] = resolution[arg_name]
+
+    def is_complete(self)-> bool:
+        """
+        is_complete recursively checks whether all arguments have been resolved
+        """
+        return (not self.missing_args) and all(child.is_complete() for child in self.kwargs.values() if isinstance(child, PostponedInitialization))
 
 def maybe_add_key(key, keys, config):
     """ 
@@ -268,6 +282,15 @@ def process_prompt(
     and class_name refers to the best guess for the name of that callable
     if a dotted path is used, the class_name will be the first part of that dotted path
     """
+    # we do an undocumented convenience thing here
+    # because one might have a list like [(str, dict), (str, str, dict), str] in the config
+    # and might be inclined to write it as [(str, dict), (str, str, dict), (str,)] out of stylistic consistency
+    # and we don't want this to cause a needless Exception
+    # but we also don't want to explicitly support tuple[str] type prompts
+    # because it will make finding out whether we are dealing with a prompt, or a tuple of prompts more difficult
+    if isinstance(prompt, (tuple, list)) and len(prompt)==1 and isinstance(prompt[0], str):
+        prompt = prompt[0]
+
     if prompt is None:  # TODO write test case for this
         cls = None
         class_name = 'None'
@@ -317,6 +340,89 @@ def split_extended_prompt(extended_prompt:ExtendedPrompt)->tuple[Prompt, dict]:
         prompt, local_config = extended_prompt, {}
     return prompt, local_config
 
+def update_postponed_initialization_from_config(
+        postponed_init:PostponedInitialization,
+        config:dict,
+        default_module:Union[None, ModuleType, str]=None,
+        registry:list=type_registry,
+        keys:Union[None, list]=None,
+        current_key:Union[None, str, tuple[str]]=None,
+        new_key_postfix:str='_config',
+        new_key_body:Union[None, str]=None,
+        new_key_base_from_param_name:bool = False,
+        ignore_params:Union[None, list[str], tuple[str]] = None,
+        ):
+    """
+    recursively update a PostponedInitialization instance if it or any of its children are missing arguments
+    here, with children we mean any PostponedInitialization instances in the kwargs of the PostponedInitialization instance
+
+    :param postponed_init: PostponedInitialization instance to update
+    :param config: the config to get the missing arguments from
+    :param default_module: optionally the default module from which to get classes if the prompt only specifies a class name
+        either an actual module, 
+        or a path to a module
+    :param registry: list of types that require initialization (or just calling) based on config before being returned
+    :param keys: (optional) potential children of config where values
+        may be retrieved from. 
+        Righter most is processed last.
+        If B is processed after A, B can overrule the values in A. 
+        A key can either be a string or a tuple of strings
+        in case of a tuple of strings, it's treated as config[key[0]][key[1]]...
+        a copy of keys is used instead and updated with f'{class_name}{new_key_postfix}' and potentially with f'{class_name}{new_key_postfix}' appended to current_key (and subkeys)
+    :param current_key: (optional) update keys based on this to deal with nested configs
+    :param new_key_postfix: string used for finding names of subconfigs  
+    :param new_key_body: string to be used instead of class_name for the creation of new keys. If None, class_name is used
+    :param new_key_base_from_param_name: if True, uses the parameter name to look for sub-configs instead of the class name
+    :param ignore_params: optional collection of parameter names to be ignored in the process (will be added to missing_args)
+    :return: None  as this is an in place operation
+    """
+    if postponed_init.is_complete():
+        return None  # no updates needed
+    
+    # first get any missing arguments from config
+    resolved_argument_names = list(postponed_init.kwargs.keys())
+    if postponed_init.missing_args:
+        postponed_init.resolve_missing_args(
+            resolution=prep_class_from_config(
+                prompt=postponed_init.prompt,
+                config=config,
+                default_module=default_module,
+                registry=registry,
+                keys=keys,
+                current_key=current_key,
+                new_key_postfix=new_key_postfix,
+                new_key_body=new_key_body,
+                new_key_base_from_param_name=new_key_base_from_param_name,
+                ignore_params=ignore_params+resolved_argument_names
+            )
+        )
+
+    # now recursively update any PostponedInitialization instances in the kwargs if needed
+    for value in postponed_init.kwargs.values():
+        if isinstance(value, PostponedInitialization):
+            # we need to get the right new_key_body possibly based on the associated parameter name
+            nkb = value.associated_parameter_name if new_key_base_from_param_name else None
+            update_postponed_initialization_from_config(
+                postponed_init=value,
+                config=config,
+                default_module=default_module,
+                registry=registry,
+                keys=_get_updated_keys(  # we need to do the update here to have it stick in the recursive calls
+                    keys=keys,
+                    current_key=current_key,
+                    class_name=value.cls.__name__,
+                    new_key_body=nkb,
+                    new_key_postfix=new_key_postfix,
+                    config=config
+                ),
+                current_key=current_key,
+                new_key_postfix=new_key_postfix,
+                new_key_body=nkb,
+                new_key_base_from_param_name=new_key_base_from_param_name,
+                ignore_params=ignore_params
+            )
+
+
 def prep_class_from_extended_prompt(
         extended_prompt: ExtendedPrompt,
         config: dict, 
@@ -328,6 +434,7 @@ def prep_class_from_extended_prompt(
         new_key_body:Union[None, str]=None,
         new_key_base_from_param_name:bool = False,
         ignore_params:Union[None, list[str], tuple[str]] = None, # TODO: test ignore_params
+        param_name:Union[None, str]=None
         )->PostponedInitialization:
     """ 
     Prepare a class from an extended prompt
@@ -361,6 +468,7 @@ def prep_class_from_extended_prompt(
     :param new_key_body: string to be used instead of class_name for the creation of new keys. If None, class_name is used
     :param new_key_base_from_param_name: if True, uses the parameter name to look for sub-configs instead of the class name
     :param ignore_params: optional collection of parameter names to be ignored in the process (will be added to missing_args)
+    :param param_name: (optional) name of the parameter that the class is being prepared for
 
     :returns: PostponedInitialization object
 
@@ -368,6 +476,25 @@ def prep_class_from_extended_prompt(
     however, in principle, it can point to any callable, including functions
     """
     prompt, local_config = split_extended_prompt(extended_prompt)
+    if ignore_params is None:
+        ignore_params = []
+    elif isinstance(ignore_params, tuple):
+        ignore_params = list(ignore_params)
+
+    if not local_config:  # just resort to prep_class_from_config
+        return prep_class_from_config(
+        prompt=prompt,
+        config=config,
+        default_module=default_module,
+        registry=registry,
+        keys=keys,
+        current_key=current_key,
+        new_key_postfix=new_key_postfix,
+        new_key_body=new_key_body,
+        new_key_base_from_param_name=new_key_base_from_param_name,
+        ignore_params=ignore_params,
+        param_name=param_name
+    )
 
     # first try to get the class from the prompt and the local config
     postponed_init = prep_class_from_config(
@@ -380,27 +507,52 @@ def prep_class_from_extended_prompt(
         new_key_postfix=new_key_postfix,
         new_key_body=new_key_body,
         new_key_base_from_param_name=new_key_base_from_param_name,
+        ignore_params=ignore_params,
+        param_name=param_name
+    )
+    # then we update the postponed_initialization with any missing arguments from the config
+    update_postponed_initialization_from_config(
+        postponed_init=postponed_init,
+        config=config,
+        default_module=default_module,
+        registry=registry,
+        keys=keys,
+        current_key=current_key,
+        new_key_postfix=new_key_postfix,
+        new_key_body=new_key_body,
+        new_key_base_from_param_name=new_key_base_from_param_name,
         ignore_params=ignore_params
     )
-    resolved_argument_names = list(postponed_init.kwargs.keys())
-    # now if there are missing arguments, try to resolve them from the original config
-    if postponed_init.missing_args:
-        postponed_init.resolve_missing_args(
-            resolution=prep_class_from_config(
-                prompt=prompt,
-                config=config,
-                default_module=default_module,
-                registry=registry,
-                keys=keys,
-                current_key=current_key,
-                new_key_postfix=new_key_postfix,
-                new_key_body=new_key_body,
-                new_key_base_from_param_name=new_key_base_from_param_name,
-                ignore_params=ignore_params+resolved_argument_names
-            )
-        )
     return postponed_init
-    
+
+def _get_updated_keys(
+        keys: Union[None, list],
+        current_key:Union[None, str, tuple[str]],
+        class_name:str,
+        new_key_body:Union[None, str],
+        new_key_postfix:str,
+        config:dict
+        ):
+    """ 
+    function for bookkeeping where to look for parameters in the config
+    """
+    new_key_body = class_name if new_key_body is None else new_key_body
+
+    # update where to look for parameters in the config
+    keys = list(keys) if keys is not None else []
+
+    new_key_base = f'{new_key_body}{new_key_postfix}'
+    maybe_add_key(new_key_base, keys, config)
+
+    # if we're working in the context of a current_key, also add a multi-index based on it to the keys
+    if isinstance(current_key, str):
+        new_key = (current_key, new_key_base)
+        maybe_add_key(new_key, keys, config)
+    elif isinstance(current_key, tuple):
+        for upto in range(1, len(current_key)+1):
+            new_key = current_key[:upto] + (new_key_base, )
+            maybe_add_key(new_key, keys, config)
+    return keys
 
 def prep_class_from_config(
         prompt: Prompt, #  Union[tuple/list[str, str], str, Callable, None], 
@@ -413,6 +565,7 @@ def prep_class_from_config(
         new_key_body:Union[None, str]=None,
         new_key_base_from_param_name:bool = False,
         ignore_params:Union[None, tuple[str], list[str]] = None, # TODO: test ignore_params
+        param_name:Union[None, str]=None,
         )->PostponedInitialization:
     """ 
     :param prompt: 
@@ -439,6 +592,7 @@ def prep_class_from_config(
     :param new_key_body: string to be used instead of class_name for the creation of new keys. If None, class_name is used
     :param new_key_base_from_param_name: if True, uses the parameter name to look for sub-configs instead of the class name
     :param ignore_params: optional collection of parameter names to be ignored in the process (will be added to missing_args)
+    :param param_name: (optional) name of the parameter that the class is being prepared for
 
     :returns: PostponedInitialization object
 
@@ -450,28 +604,19 @@ def prep_class_from_config(
     # print(f"prepare {cls=} with {class_name=} from {prompt=}")
     if cls is None:
         return None
-
-    new_key_body = class_name if new_key_body is None else new_key_body
     
     # get the call signature for cls
     signature = inspect.signature(cls)
 
     # update where to look for parameters in the config
-    keys = list(keys) if keys is not None else []
-
-    new_key_base = f'{new_key_body}{new_key_postfix}'
-    # print(f"maybe add {new_key_base=} to {keys=}")
-    maybe_add_key(new_key_base, keys, config)
-    # print(f"now {keys=}")
-
-    # if we're working in the context of a current_key, also add a multi-index based on it to the keys
-    if isinstance(current_key, str):
-        new_key = (current_key, new_key_base)
-        maybe_add_key(new_key, keys, config)
-    elif isinstance(current_key, tuple):
-        for upto in range(1, len(current_key)+1):
-            new_key = current_key[:upto] + (new_key_base, )
-            maybe_add_key(new_key, keys, config)
+    keys = _get_updated_keys(
+        keys=keys,
+        current_key=current_key,
+        class_name=class_name,
+        new_key_body=new_key_body,
+        new_key_postfix=new_key_postfix,
+        config=config
+    )
     
     # get the relevant values from the config
     kwargs, missing_args = match_signature_from_config(
@@ -485,7 +630,7 @@ def prep_class_from_config(
         ignore_params=ignore_params
         )
 
-    return PostponedInitialization(cls, kwargs, missing_args)
+    return PostponedInitialization(cls, kwargs, missing_args, signature, prompt=prompt, associated_parameter_name=param_name)
     
     
 def get_parameter_from_config(
@@ -505,6 +650,9 @@ def get_parameter_from_config(
     if config[param_name] needs to be initialized according to registry, prepare for doing so.
     if config[param_name] is supposed to be a callable or type according to the annotation, get the callable from the config
         if config[param_name] is an extended prompt containing a local_config, the callable is wrapped in a partial with that local_config
+        NB if this extended prompt contains classes requiring initialization, the partial may contain PostponedInitialization instances in its stored arguments
+            as it is unclear what the correct behaviour here should be (initialize once upon creation of the partial, or every time upon calling the partial)
+            we leave this to the user to decide
     :param param_name: key for the config
     :param details: inspect.Parameter containing specifications about what param_name should contain (for checking against registry)
     :param config: config from which to get the value
@@ -527,78 +675,93 @@ def get_parameter_from_config(
     """
     # first some checks on the type of the parameter
     # **kwargs are not supported because we don't really have a way of knowing what might be in there
-    # positional only arguments are not supported because we store all our arguments in a dict and feed that to the callable upon initialization/calling
     if details.kind is details.VAR_KEYWORD:
         raise NotImplementedError(f"We don't support matching VAR_KEYWORD arguments (raised in treating {param_name=} with {details=})")
-    elif details.kind is details.POSITIONAL_ONLY:
-        raise NotImplementedError(f"We don't support POSITIONAL_ONLY arguments (raised in treating {param_name=} with {details=})")
     
     contents = config[param_name] if sub_config is None else sub_config[param_name]
-    if contains(details.annotation, registry=registry): 
-        # print(f'handling {param_name=} and {details.annotation=} as a class')
-        if details.kind is details.VAR_POSITIONAL:
-            # contents should be a list of extended prompts
-            # TODO add documentation on this to docstring
-            contents = [
-                prep_class_from_extended_prompt(
-                    prompt=extended_prompt,
-                    config=config,
-                    default_module=default_module,
-                    registry=registry,
-                    keys=keys,
-                    current_key=current_key,
-                    new_key_postfix=new_key_postfix,
-                    new_key_body= param_name if new_key_base_from_param_name else None,
-                    new_key_base_from_param_name=new_key_base_from_param_name
-                )
-                for extended_prompt in contents
-            ]
-        else: 
-            contents = prep_class_from_config(
-                prompt=contents, 
-                config=config, 
-                default_module=default_module, 
-                registry=registry, 
-                keys=keys, 
-                current_key=current_key, 
-                new_key_postfix=new_key_postfix,
-                new_key_body= param_name if new_key_base_from_param_name else None,
-                new_key_base_from_param_name=new_key_base_from_param_name
-                )
-    elif _annotation_says_callable_or_type(details.annotation):
-        # contents should be an ExtendedPrompt
-        # case for this: activation functions
-        return get_callable_from_extended_prompt(contents)
-    return contents 
 
-def _annotation_says_callable_or_type(annotation):
-    """
-    should the annotation be treated as saying that the parameter should be a callable or a type
-    """ 
-    annotation = get_origin(annotation) or annotation  
-    # if the annotation is a parameterized generic, get the origin, 
-    # otherwise just use the annotation
-    if isinstance(annotation, type) and issubclass(annotation, type):
-        # this is for cases like type[torch.nn.Module]
-        # by using get_origin, we change this into type
-        # and by checking if this is a subclass of type, we find out that indeed, the annotation is a type
-        # note that other metaclasses (e.g. abc.ABCMeta) are also subclasses of type so we shoud indeed use issubclass
-        # 
-        # on the other hand if the annotation is e.g. torch.nn.Module, isinstance(annotation, type) will return True,
-        # but according to the annotation this shouldn't be passed as a class but as an instance,
-        # so we should return False
-        #
-        # the reason we need isinstance before issubclass is that if the annotation is a Union of types,
-        # get_origin will return typing.Union. 
-        # issubclass(typing.Union, type) will raise a TypeError, but isinstance(typing.Union, type) is False, 
-        # so issubclass will never be called
-        # TODO consider adding support for a union of types
-        return True
-    return annotation in (callable, Callable, 'callable', 'Callable', 'type')
+    # there are a few different cases we need to handle
+    # we'll first define how to handle them
+    # then we'll define how to check for them
+    # and then we'll execute the appropriate handler based on the check
 
-def get_callable_from_extended_prompt(extended_prompt: ExtendedPrompt):
+    handle_registry_element_case_single = partial(
+        prep_class_from_extended_prompt, 
+        config=config, 
+        default_module=default_module,
+        registry=registry,
+        keys=keys,
+        current_key=current_key,
+        new_key_postfix=new_key_postfix,
+        new_key_body= param_name if new_key_base_from_param_name else None,
+        new_key_base_from_param_name=new_key_base_from_param_name,
+        param_name=param_name
+        )
+    handle_registy_element_case = _internal_utils.make_maybe_list_case_handler(
+        handle_single_case=handle_registry_element_case_single,
+        allow_extended_prompt_for_single_case=True  # why not? it's a free feature at this point
+    )  # this one is for either T, list[T], tuple[T], or Union[T, list[T], tuple[T]] where T is a registry element
+    # also meant to handle varargs with type T
+    # T may itself be a Union of types in the registry and None
+
+    handle_callable_or_type_case = _internal_utils.make_maybe_list_case_handler(
+        partial(get_callable_from_extended_prompt, default_module=default_module), 
+        allow_extended_prompt_for_single_case=True
+        )
+    # this one is for Callable, type[T], Union[Callable, type[T]], list[Callable], list[type[T]], etc.  where T is some class (not necessarily in the registry)
+    # also meant to handle varargs with type Callable, type[T], or Union[Callable, type[T]]
+
+    handle_callable_or_registry_element_case_single = partial(
+        get_callable_or_prep_class_from_extended_prompt,
+        config=config,
+        default_module=default_module,
+        registry=registry,
+        keys=keys,
+        current_key=current_key,
+        new_key_postfix=new_key_postfix,
+        new_key_body= param_name if new_key_base_from_param_name else None,
+        new_key_base_from_param_name=new_key_base_from_param_name,
+        param_name=param_name
+    )
+    handle_callable_or_registry_element_case = _internal_utils.make_maybe_list_case_handler(handle_callable_or_registry_element_case_single, allow_extended_prompt_for_single_case=True)
+    # this one is for Union[Callable, T], list[Union[Callable, T]], tuple[Union[Callable, T]], and Union[Callable, T, list[Union[Callable, T]], tuple[Union[Callable, T]]] where T is a registry element
+    # (think cases where some model needs either a pure function as activation function, or some torch.nn.Module or something like that)
+
+    # Now we define the checks for the various cases
+    # first we do the simple checks
+    registry_element_check = partial(is_in_registry, registry=registry)
+    callable_or_type_check = _internal_utils.annotation_is_callable_or_type
+    callable_or_registry_element_check = partial(_internal_utils.annotation_is_registry_element_or_callable, registry=registry)
+
+    # we now lift these type checks to allow for unions of their positive types (and None) and lists/tuples of these unions
+    # these lifted versions return an auxiliary boolean indicating whether the annotation includes lists or tuples
+    registry_element_check = _internal_utils.make_general_type_check(registry_element_check, allow_none=True)
+    callable_or_type_check = _internal_utils.make_general_type_check(callable_or_type_check, allow_none=True)
+    callable_or_registry_element_check = _internal_utils.make_general_type_check(callable_or_registry_element_check, allow_none=True)
+
+    # now we do the work
+    annotation = details.annotation
+    is_var_positional = details.kind is details.VAR_POSITIONAL
+
+    # the following code is ugly for a reason
+    # we really do need to know whether the annotation allows for list/tuples or not
+    # because if it doesn't, we don't need to check whether contents is a valid prompt/extended prompt
+    # and checking if it is a valid prompt/extended prompt leads to user warnings because it is hard to know for sure whether (str, str) is meant to be a prompt or a tuple of two prompts. 
+    
+    # also, we can't use match statements because we want to support python 3.9
+    if (check_result := registry_element_check(annotation))[0]:  # first element is whether it's the right type, second is whether the annotation includes lists or tuples
+        return handle_registy_element_case(contents, allow_multiple=(is_var_positional or check_result[1]))
+    elif (check_result := callable_or_type_check(annotation))[0]:
+        return handle_callable_or_type_case(contents, allow_multiple=(is_var_positional or check_result[1]))
+    elif (check_result := callable_or_registry_element_check(annotation))[0]:  # NB the order is important here, this one would give True if any of the above give True
+        return handle_callable_or_registry_element_case(contents, allow_multiple=(is_var_positional or check_result[1]))
+    else:
+        # we assume we're dealing with a simple type such as int, str, etc.
+        return contents 
+
+def get_callable_from_extended_prompt(extended_prompt: ExtendedPrompt, default_module:Union[None, ModuleType, str]=None):
     """get_callable_from_extended_prompt 
-    return a callable object specified by an extended_prompt
+    return a callable object specified by an ExtendedPrompt
 
     :param extended_prompt: one of:
         path, name, local_config  
@@ -612,13 +775,57 @@ def get_callable_from_extended_prompt(extended_prompt: ExtendedPrompt):
         None
     :return: the specified callable. 
     If a local_config is provided, the callable is wrapped in a partial with that local_config
+    NB if extended_prompt is None, None is returned
     """
     prompt, local_config = split_extended_prompt(extended_prompt)
-    callable_object, _ = process_prompt(prompt)
+    callable_object, _ = process_prompt(prompt, default_module=default_module)
     if local_config:
         callable_object = partial(callable_object, **local_config)
     return callable_object
-
+    
+def get_callable_or_prep_class_from_extended_prompt(
+        extended_prompt: ExtendedPrompt, 
+        config: dict, 
+        default_module:Union[None, ModuleType, str]=None, 
+        registry:list=type_registry, 
+        keys:Union[None, list]=None, 
+        current_key:Union[None, str, tuple[str]]=None, 
+        new_key_postfix:str='_config', 
+        new_key_body:Union[None, str]=None, 
+        new_key_base_from_param_name:bool = False, 
+        ignore_params:Union[None, tuple[str], list[str]] = None,
+        param_name:Union[None, str]=None
+        ):
+    """
+    Check whether the extended_prompt points to a registry element
+    if it does, continue with prep_class_from_extended_prompt
+    if it doesn't, continue with get_callable_from_extended_prompt
+    """
+    # the alternative check would be to check whether the prompt points to a callable or a type
+    # the downside of doing that is that one might use meta-classes to create classes that behave like functions
+    # if that's the case, we'd want to treat them as callables, not as classes
+    
+    # the downside is that if the user provides a class of a type that is not in the registry, we'll treat it as a callable
+    # but then again, adding it to the registry is not that hard and shouldn't have any negative side effects
+    
+    # this function results in two calls to split_extended_prompt and process_prompt, but that shouldn't be a problem
+    prompt, _ = split_extended_prompt(extended_prompt)
+    callable_object, _ = process_prompt(prompt, default_module=default_module)
+    if is_in_registry(callable_object, registry=registry):
+        return prep_class_from_extended_prompt(
+            extended_prompt=extended_prompt,
+            config=config,
+            default_module=default_module,
+            registry=registry,
+            keys=keys,
+            current_key=current_key,
+            new_key_postfix=new_key_postfix,
+            new_key_body=new_key_body,
+            new_key_base_from_param_name=new_key_base_from_param_name,
+            ignore_params=ignore_params,
+            param_name=param_name,
+        )
+    return get_callable_from_extended_prompt(extended_prompt, default_module=default_module)
 
 
 def match_signature_from_config(

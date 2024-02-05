@@ -27,7 +27,22 @@ But on the other hand, the some_parameter int should just be pulled from the con
 
 So this type registry is used to specify which types are initialized, and which don't need to be initialized
 """
-from typing import Union, get_origin, get_args
+from typing import Union, get_origin, get_args, ForwardRef
+import warnings
+from functools import wraps
+
+def _deprecated(func=None, alternative=None):
+    if func is None:
+        return lambda func: _deprecated(func, alternative=alternative)
+    warning = f"Call to deprecated function {func.__name__}."
+    if alternative is not None:
+        alt = alternative if isinstance(alternative, str) else alternative.__name__
+        warning += f" Use {alt} instead."
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        warnings.warn(warning, DeprecationWarning)
+        return func(*args, **kwargs)
+    return wrapper
 
 __all__ = [
     "type_registry",
@@ -42,6 +57,10 @@ def register_type(obj, registry=type_registry):
     registry.append(obj)
     return obj
 
+def is_in_registry(maybe_element, registry=type_registry):
+    return any(is_subclass(maybe_element, registry_element) for registry_element in registry)
+
+@_deprecated(alternative=is_in_registry)
 def contains(cls_spec, registry=type_registry):
     """contains: check if registry contains cls_spec
     True if cls_spec is either
@@ -66,15 +85,19 @@ def contains(cls_spec, registry=type_registry):
     return any(is_subclass(cls_spec, registry_element) for registry_element in registry)
         
 def is_subclass(maybe_subclass, maybe_parentclass):
+    """is_subclass check if we should consider maybe_subclass a subclass of maybe_parentclass
+
+    if maybe_subclass or maybe_parentclass are not type instances, they are not considered subclasses
+    if maybe_subclass is a parameterized type, we check if its origin is a subclass of maybe_parentclass
+        i.e. if maybe_subclass = T[V], we return issubclass(T, maybe_parentclass)
+    """
     if not (isinstance(maybe_subclass, type) and isinstance(maybe_parentclass, type)):
         # if maybe_subclass is not a class, it is not a subclass
         # if maybe_parentclass is not a class, it is not a parentclass
         return False
-
-    # this can fail at least in python 3.9
-    # isinstance(list[int], type) gives True
-    # isinstance(collections.abc.Sequence, type) gives True
-    # yet issubclass(list[int], collections.abc.Sequence) gives a TypeError
-    # TODO think about how to handle parameterized types
+    
+    origin = get_origin(maybe_subclass)
+    if origin is not None:
+        # if maybe_subclass is a parameterized type, check if its origin is a subclass of maybe_parentclass
+        return issubclass(origin, maybe_parentclass)
     return issubclass(maybe_subclass, maybe_parentclass)
-
