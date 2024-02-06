@@ -199,7 +199,8 @@ class PostponedInitialization:
     def __str__(self) -> str:
         return self.__repr__()
     
-    def resolve_missing_args(self, resolution:Union[dict, 'PostponedInitialization'], allow_different_class:bool=False):
+    def resolve_missing_args(self, resolution:Union[dict, 'PostponedInitialization'], allow_different_class:bool=True):
+        # set allow_different_class to be true by default so this can work with wrapped classes and methods etc. too
         if isinstance(resolution, PostponedInitialization):
             if self.cls is not resolution.cls and not allow_different_class:
                 raise ValueError(f"{self.cls=} does not match {resolution.cls=} and {allow_different_class=}")
