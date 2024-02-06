@@ -5,6 +5,7 @@ Some utilities for collecting and reporting metrics during training
 import abc
 from enum import Enum
 from typing import Union
+from common_dl_utils.type_registry import register_type
 
 __all__ = [
     'MetricFrequency',
@@ -20,6 +21,7 @@ class MetricFrequency(Enum):
     EVERY_N_BATCHES = 'every_n_batches'
     EVERY_N_EPOCHS = 'every_n_epochs'
 
+@register_type
 class Metric(abc.ABC):
     """
     Abstract base class for metrics
@@ -37,6 +39,7 @@ class Metric(abc.ABC):
     def __str__(self):
         return self.__repr__()
 
+@register_type
 class MetricCollector:
     def __init__(self, *metrics:Metric, batch_frequency:int, epoch_frequency:int):
         """
