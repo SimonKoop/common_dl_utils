@@ -215,7 +215,17 @@ class PostponedInitialization:
         """
         is_complete recursively checks whether all arguments have been resolved
         """
-        return (not self.missing_args) and all(child.is_complete() for child in self.kwargs.values() if isinstance(child, PostponedInitialization))
+        no_missing_args = not self.missing_args
+        all_simple_children_complete = all(child.is_complete() for child in self.kwargs.values() if isinstance(child, PostponedInitialization))
+        all_list_or_tuple_children_complete = all(
+            all(
+                element.is_complete() 
+                for element in child if isinstance(element, PostponedInitialization)
+            )
+            for child in self.kwargs.values() 
+            if isinstance(child, (list, tuple))
+        )
+        return no_missing_args and all_simple_children_complete and all_list_or_tuple_children_complete
 
 def maybe_add_key(key, keys, config):
     """ 
@@ -421,6 +431,30 @@ def update_postponed_initialization_from_config(
                 new_key_base_from_param_name=new_key_base_from_param_name,
                 ignore_params=ignore_params
             )
+        # also update any lists and tuples of PostponedInitialization instances
+        elif isinstance(value, (list, tuple)):
+            for element in value:
+                if isinstance(element, PostponedInitialization):
+                    nkb = element.associated_parameter_name if new_key_base_from_param_name else None
+                    update_postponed_initialization_from_config(
+                        postponed_init=element,
+                        config=config,
+                        default_module=default_module,
+                        registry=registry,
+                        keys=_get_updated_keys(
+                            keys=keys,
+                            current_key=current_key,
+                            class_name=element.cls.__name__,
+                            new_key_body=nkb,
+                            new_key_postfix=new_key_postfix,
+                            config=config
+                        ),
+                        current_key=current_key,
+                        new_key_postfix=new_key_postfix,
+                        new_key_body=nkb,
+                        new_key_base_from_param_name=new_key_base_from_param_name,
+                        ignore_params=ignore_params
+                    )
 
 
 def prep_class_from_extended_prompt(

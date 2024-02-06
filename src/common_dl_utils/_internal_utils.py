@@ -5,6 +5,8 @@ from common_dl_utils.type_registry import is_in_registry, type_registry
 import functools
 import inspect
 
+NoneType = type(None)
+
 def annotation_is_callable_or_type(annotation):
     """
     is the annotation either Callable or type[something]?
@@ -45,14 +47,14 @@ def make_union_type_check(type_check:Callable, allow_none=True, aggregate_auxili
     def union_type_check(annotation):
         origin = get_origin(annotation)
         if origin != Union:
-            return type_check(annotation) or (annotation is None and allow_none)
+            return type_check(annotation) or (annotation in (NoneType, None) and allow_none)
         results = [type_check(arg) for arg in get_args(annotation)]
         if isinstance(results[0], bool):
             #  get_args returns NoneType instead of None for Union[None, ...]
-            return all(check or (arg is type(None) and allow_none) for check, arg in zip(results, get_args(annotation)))
+            return all(check or (arg is NoneType and allow_none) for check, arg in zip(results, get_args(annotation)))
         # type_check has returned some auxiliary information
         result, *auxiliaries = zip(*results)
-        return (all(check or (arg is type(None) and allow_none) for check, arg in zip(result, get_args(annotation))),) + tuple(map(aggregate_auxiliaries, auxiliaries))
+        return (all(check or (arg is NoneType and allow_none) for check, arg in zip(result, get_args(annotation))),) + tuple(map(aggregate_auxiliaries, auxiliaries))
     return union_type_check
 
 def make_list_or_tuple_type_check(type_check:Callable):

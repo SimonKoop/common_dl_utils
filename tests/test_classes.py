@@ -47,19 +47,12 @@ class TestType4:
     def __repr__(self):
         return str(self)
 
-@register_type
-class TestType5:
-    def __init__(
-            self, 
-            a:Union[TestType1, TestType2], 
-            b:Union[BaseTestType, list[BaseTestType], None], 
-            c:Union[type[BaseTestType], list[type[BaseTestType]], None], 
-            d: Union[BaseTestType, Callable, list[BaseTestType], list[Callable], list[Union[BaseTestType, Callable]]]
-            ):
-        self.a = a
-        self.b = b
-        self.c = c
-        self.d = d
+@dataclass
+class TestType5(BaseTestType):
+    a:Union[TestType1, TestType2]
+    b:Union[BaseTestType, list[BaseTestType], None]
+    c:Union[type[BaseTestType], list[type[BaseTestType]], None]
+    d: Union[BaseTestType, Callable, list[BaseTestType], list[Callable], list[Union[BaseTestType, Callable]]]
 
     def __str__(self):
         return f"TestType5(a={str(self.a)}, b={str(self.b)}, c={str(self.c)}, d={str(self.d)})"
