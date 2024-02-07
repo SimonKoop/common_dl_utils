@@ -78,8 +78,14 @@ class MetricCollector:
         self._step = 0
         self._epoch = 1
 
-        self.required_kwargs_on_batch_end = set.union(*[metric.required_kwargs for metric in self.on_every_batch + self.on_every_n_batches])
-        self.required_kwargs_on_epoch_end = set.union(*[metric.required_kwargs for metric in self.on_every_epoch + self.on_every_n_epochs])
+        if self.on_every_batch or self.on_every_n_batches:
+            self.required_kwargs_on_batch_end = set.union(*[metric.required_kwargs for metric in self.on_every_batch + self.on_every_n_batches])
+        else:
+            self.required_kwargs_on_batch_end = set()
+        if self.on_every_epoch or self.on_every_n_epochs:
+            self.required_kwargs_on_epoch_end = set.union(*[metric.required_kwargs for metric in self.on_every_epoch + self.on_every_n_epochs])
+        else:
+            self.required_kwargs_on_epoch_end = set()
 
     def on_batch_end(self, **kwargs):
         """
