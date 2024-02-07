@@ -1,6 +1,6 @@
 import os
 import warnings
-from typing import Any, Union, get_origin, get_args, Callable
+from typing import Any, Union, get_origin, get_args, Callable, Mapping
 from common_dl_utils.type_registry import is_in_registry, type_registry
 import functools
 import inspect
@@ -109,10 +109,10 @@ def is_valid_extended_prompt(maybe_prompt:Any):
             return False # all extened prompt options are either two or three elements long
         if len(maybe_prompt) == 2:
             part_0, part_1 = maybe_prompt
-            if isinstance(part_0, str) and isinstance(part_1, dict):
+            if isinstance(part_0, str) and isinstance(part_1, Mapping):
                 return True
             elif isinstance(part_0, str):
-                # string can only be followed by a string or a dict
+                # string can only be followed by a string or a Mapping
                 # and if we have two strings, the first one must be a valid path
                 if not isinstance(part_1, str):
                     return False
@@ -126,13 +126,13 @@ def is_valid_extended_prompt(maybe_prompt:Any):
                 # so a list/tuple of two strings may either be an extended prompt (if the first one is a path) or a list/tuple of two prompts (both being just strings that shouldn't be paths)
                 return expected_outcome
             else:
-                return callable(part_0) and isinstance(part_1, dict)
+                return callable(part_0) and isinstance(part_1, Mapping)
         else: # len(maybe_prompt) == 3
             part_0, part_1, part_2 = maybe_prompt
             # no need to check if part_0 is a valid path in this case:
-            # a dict can not be an extended prompt, so maybe_prompt can not be a list or tuple of extended prompts
+            # a Mapping can not be an extended prompt, so maybe_prompt can not be a list or tuple of extended prompts
             # and a typo in part_0 should result in a sensible down-stream ModuleNotFoundError
-            return isinstance(part_0, str) and isinstance(part_1, str) and isinstance(part_2, dict)
+            return isinstance(part_0, str) and isinstance(part_1, str) and isinstance(part_2, Mapping)
     else:
         return False
     

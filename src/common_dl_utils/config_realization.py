@@ -1,5 +1,5 @@
 """ 
-Module for automatically creating models from config dicts.
+Module for automatically creating models from config Mappings.
 Many of the models in the survey contain multiple sub-models. 
 Initializing a full model requires initialization of all its sub models.
 Hardcoding this for every model makes swapping out architectures and training loops etc. cumbersome 
@@ -96,7 +96,7 @@ TestType2(param_1=112211, param_2=122, toggle_1=True, sub_model_tt2=TestType3(pa
 
 For getting classes from other files, just put a prompt of the form
 >>> (path, class_name) 
-to the config dict, where path is either a relative, or an absolute path (e.g. ("./architectures/dataset_1/v1.py", 'Encoder'))
+to the config Mapping, where path is either a relative, or an absolute path (e.g. ("./architectures/dataset_1/v1.py", 'Encoder'))
 
 High level function: get_model_from_config
 Low level function that requires a little bit more boiler plate but is more broadly applicable: prep_class_from_config
@@ -105,10 +105,10 @@ NB wherever it says class, typically any type of callable should work
 """
 
 import inspect
-from typing import Union, Callable, Any, get_origin, get_args
+from typing import Union, Callable, Any, Mapping
 #from collections.abc import Sequence
 from types import ModuleType
-from common_dl_utils.type_registry import type_registry, contains, is_in_registry
+from common_dl_utils.type_registry import type_registry, is_in_registry
 from common_dl_utils.module_loading import load_from_path, MultiModule
 from common_dl_utils.trees import get_from_index, has_index, tree_map
 import common_dl_utils._internal_utils as _internal_utils
@@ -134,7 +134,7 @@ __all__ = [
 
 # common types
 Prompt = Union[tuple[str, str], list[str, str], str, Callable, None]
-ExtendedPrompt = Union[tuple[str, str, dict], list[str, str, dict], tuple[str, dict], list[str, dict], tuple[Callable, dict], list[Callable, dict], Prompt]
+ExtendedPrompt = Union[tuple[str, str, Mapping], list[str, str, Mapping], tuple[str, Mapping], list[str, Mapping], tuple[Callable, Mapping], list[Callable, Mapping], Prompt]
 Prompt.__doc__ = """
 Prompt (type alias)
 either a string specifying the name of some object in some default_module
@@ -147,12 +147,12 @@ or None if this is for an optional argument
 ExtendedPrompt.__doc__ = """
 ExtendedPrompt (type alias)
 Either a Prompt (see Prompt) or one of the following:
-    a tuple/list with one or two strings and a dict
+    a tuple/list with one or two strings and a Mapping
         in case of one string it is the name of an object in some default_module
         in case of two strings, the first is the location of the appropriate module, the second the name of an object in said module
-        the dict is a local_config for the object (specifying parameters for initialization/calling)
-    a tuple/list with a Callable and a dict
-        the dict is again a local_config for the Callable
+        the Mapping is a local_config for the object (specifying parameters for initialization/calling)
+    a tuple/list with a Callable and a Mapping
+        the Mapping is again a local_config for the Callable
 """
 
 
@@ -161,7 +161,7 @@ class PostponedInitialization:
     to prevent unused models from being created in while looping over the keys in match_signature_from_config,
     we postpone initialization of classes based on kwargs until we are certain we need them
     """ # TODO handle VAR_POSITIONAL
-    def __init__(self, cls:type, kwargs:dict, missing_args:Union[None, list]=None, signature:inspect.Signature=None, prompt: Prompt=None, associated_parameter_name:Union[None, str]=None): 
+    def __init__(self, cls:type, kwargs:Mapping, missing_args:Union[None, list]=None, signature:inspect.Signature=None, prompt: Prompt=None, associated_parameter_name:Union[None, str]=None): 
         self.cls = cls 
         self.signature = signature if signature is not None else inspect.signature(cls)
         self.kwargs = kwargs 
@@ -199,7 +199,7 @@ class PostponedInitialization:
     def __str__(self) -> str:
         return self.__repr__()
     
-    def resolve_missing_args(self, resolution:Union[dict, 'PostponedInitialization'], allow_different_class:bool=True):
+    def resolve_missing_args(self, resolution:Union[Mapping, 'PostponedInitialization'], allow_different_class:bool=True):
         # set allow_different_class to be true by default so this can work with wrapped classes and methods etc. too
         if isinstance(resolution, PostponedInitialization):
             if self.cls is not resolution.cls and not allow_different_class:
@@ -207,7 +207,7 @@ class PostponedInitialization:
             resolution = resolution.kwargs
         if not self.missing_args:
             return None
-        for arg_name in resolution:  # resolution is now a dict
+        for arg_name in resolution:  # resolution is now a Mapping
             if arg_name in self.missing_args:
                 self.missing_args.remove(arg_name)
                 self.kwargs[arg_name] = resolution[arg_name]
@@ -294,8 +294,8 @@ def process_prompt(
     if a dotted path is used, the class_name will be the first part of that dotted path
     """
     # we do an undocumented convenience thing here
-    # because one might have a list like [(str, dict), (str, str, dict), str] in the config
-    # and might be inclined to write it as [(str, dict), (str, str, dict), (str,)] out of stylistic consistency
+    # because one might have a list like [(str, Mapping), (str, str, Mapping), str] in the config
+    # and might be inclined to write it as [(str, Mapping), (str, str, Mapping), (str,)] out of stylistic consistency
     # and we don't want this to cause a needless Exception
     # but we also don't want to explicitly support tuple[str] type prompts
     # because it will make finding out whether we are dealing with a prompt, or a tuple of prompts more difficult
@@ -329,7 +329,7 @@ def process_prompt(
     class_name = class_name.split('.')[0]
     return cls, class_name
 
-def split_extended_prompt(extended_prompt:ExtendedPrompt)->tuple[Prompt, dict]:
+def split_extended_prompt(extended_prompt:ExtendedPrompt)->tuple[Prompt, Mapping]:
     """split_extended_prompt split an ExtendedPrompt into a Prompt and a dictionary (for local config)
 
     :param extended_prompt: one of:
@@ -340,10 +340,10 @@ def split_extended_prompt(extended_prompt:ExtendedPrompt)->tuple[Prompt, dict]:
         name
         callable
         None
-    :return: Prompt, local_config dict
-    NB if no local_config is provided, an empty dict is returned
+    :return: Prompt, local_config Mapping
+    NB if no local_config is provided, an empty Mapping is returned
     """
-    if isinstance(extended_prompt, Iterable) and isinstance(extended_prompt[-1], dict):
+    if isinstance(extended_prompt, Iterable) and isinstance(extended_prompt[-1], Mapping):
         prompt, local_config = extended_prompt[:-1], extended_prompt[-1]
         if len(prompt) == 1:
             prompt = prompt[0]
@@ -353,7 +353,7 @@ def split_extended_prompt(extended_prompt:ExtendedPrompt)->tuple[Prompt, dict]:
 
 def update_postponed_initialization_from_config(
         postponed_init:PostponedInitialization,
-        config:dict,
+        config:Mapping,
         default_module:Union[None, ModuleType, str]=None,
         registry:list=type_registry,
         keys:Union[None, list]=None,
@@ -460,7 +460,7 @@ def update_postponed_initialization_from_config(
 
 def prep_class_from_extended_prompt(
         extended_prompt: ExtendedPrompt,
-        config: dict, 
+        config: Mapping, 
         default_module:Union[None, ModuleType, str]=None, 
         registry:list=type_registry,
         keys:Union[None, list]=None,
@@ -484,7 +484,7 @@ def prep_class_from_extended_prompt(
         name
         callable
         None
-    :param config: config dict containing parameters for initialization
+    :param config: config Mapping containing parameters for initialization
         if the extended_prompt contains a local_config, we first try to prepare the class from that local_config
         if any arguments are then missing, we try to resolve these from config
     :param default_module: optionally the default module from which to get classes if the prompt only specifies a class name
@@ -566,7 +566,7 @@ def _get_updated_keys(
         class_name:str,
         new_key_body:Union[None, str],
         new_key_postfix:str,
-        config:dict
+        config:Mapping
         ):
     """ 
     function for bookkeeping where to look for parameters in the config
@@ -591,7 +591,7 @@ def _get_updated_keys(
 
 def prep_class_from_config(
         prompt: Prompt, #  Union[tuple/list[str, str], str, Callable, None], 
-        config: dict, 
+        config: Mapping, 
         default_module:Union[None, ModuleType, str]=None, 
         registry:list=type_registry,
         keys:Union[None, list]=None,
@@ -610,7 +610,7 @@ def prep_class_from_config(
             and the second being the name of the class withing that module
         or a callable to be used directly
         or None if this is for an optional argument
-    :param config: config dict containing parameters for initialization
+    :param config: config Mapping containing parameters for initialization
     :param default_module: optionally the default module from which to get classes if the prompt only specifies a class name
         either an actual module, 
         or a path to a module
@@ -671,11 +671,11 @@ def prep_class_from_config(
 def get_parameter_from_config(
         param_name:str, 
         details:inspect.Parameter, 
-        config:dict, 
+        config:Mapping, 
         registry:list=type_registry, 
         default_module:Union[None, ModuleType, str]=None, 
         keys:Union[None, list]=None, 
-        sub_config:Union[None, dict]=None, 
+        sub_config:Union[None, Mapping]=None, 
         current_key:Union[None, str, tuple[str]]=None,
         new_key_postfix: str='_config',
         new_key_base_from_param_name:bool = False,
@@ -820,7 +820,7 @@ def get_callable_from_extended_prompt(extended_prompt: ExtendedPrompt, default_m
     
 def get_callable_or_prep_class_from_extended_prompt(
         extended_prompt: ExtendedPrompt, 
-        config: dict, 
+        config: Mapping, 
         default_module:Union[None, ModuleType, str]=None, 
         registry:list=type_registry, 
         keys:Union[None, list]=None, 
@@ -865,14 +865,14 @@ def get_callable_or_prep_class_from_extended_prompt(
 
 def match_signature_from_config(
         signature: inspect.Signature,
-        config: dict,
+        config: Mapping,
         keys: Union[None, list],
         registry:list = type_registry,
         default_module:Union[None, ModuleType, str] = None,
         new_key_postfix:str = '_config',
         new_key_base_from_param_name:bool = False,
         ignore_params:Union[None, tuple[str], list[str]] = None,
-        )->tuple[dict, list]:
+        )->tuple[Mapping, list]:
     """ 
     :param signature: the call signature to be matched
     :param config: the config to pull the values from
@@ -983,12 +983,12 @@ def _get_kwargs_update(
 
 
 def get_model_from_config(
-        config: dict, 
+        config: Mapping, 
         model_prompt:str="model_type", 
         default_module_key:str="architecture", 
         registry:list=type_registry, 
         keys:Union[None, list]=None, 
-        missing_kwargs:Union[None, dict]=None,
+        missing_kwargs:Union[None, Mapping]=None,
         sub_config_postfix:str = '_config',
         sub_config_from_param_name:bool = True,
         model_sub_config_name_base:Union[None, str]=None,
@@ -997,8 +997,8 @@ def get_model_from_config(
         initialize:bool=True,
         )->object:
     """ 
-    produce a model from a config dict
-    :param config: config dict specifying the model
+    produce a model from a config Mapping
+    :param config: config Mapping specifying the model
     :param model_prompt: key in config. prompt=config[model_prompt] should point to where the model class is located 
     :param default_module_key: optional key in config pointing to a module containing architectures (e.g. for encoders, decoders, etc.)
         if not None, config[default_module_key] should be a path to a python file
@@ -1009,7 +1009,7 @@ def get_model_from_config(
         If B is processed after A, B can overrule the values in A. 
         A key can either be a string or a tuple of strings
         in case of a tuple of strings, it's treated as config[key[0]][key[1]]...
-    :param missing_kwargs: optional dict of keyword arguments to be passed to the model class (can overrule the values specified in config)
+    :param missing_kwargs: optional Mapping of keyword arguments to be passed to the model class (can overrule the values specified in config)
     :param sub_config_postfix: string used for finding names of subconfigs 
     :param sub_config_from_param_name: if True, uses the parameter name to look for sub-configs, otherwise uses the class name
     :param model_sub_config_name_base: optional string to use for finding the sub-config for this model
