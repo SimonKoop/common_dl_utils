@@ -1035,8 +1035,7 @@ def get_model_from_config(
             default_module = MultiModule(default_module, *additional_architecture_default_modules)
         else: 
             default_module = MultiModule(default_module, additional_architecture_default_modules)
-    if missing_kwargs:
-        ignore_params = list(missing_kwargs.keys())
+    ignore_params = list(missing_kwargs.keys()) if missing_kwargs else None
     uninitialized_model = prep_class_from_config(
         prompt=prompt, 
         config=config, 
@@ -1045,7 +1044,7 @@ def get_model_from_config(
         keys=keys, 
         new_key_postfix=sub_config_postfix,
         new_key_body=model_sub_config_name_base,
-        new_key_base_from_param_name=sub_config_from_param_name
+        new_key_base_from_param_name=sub_config_from_param_name,
         ignore_params=ignore_params
         )
     if missing_kwargs:
