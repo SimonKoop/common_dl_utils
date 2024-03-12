@@ -985,7 +985,7 @@ def _get_kwargs_update(
 def get_model_from_config(
         config: Mapping, 
         model_prompt:str="model_type", 
-        default_module_key:str="architecture", 
+        default_module_key:Union[str, None]="architecture", 
         registry:list=type_registry, 
         keys:Union[None, list]=None, 
         missing_kwargs:Union[None, Mapping]=None,
@@ -1032,9 +1032,15 @@ def get_model_from_config(
         default_module = MultiModule(default_module, model_module) if default_module is not None else model_module
     if additional_architecture_default_modules is not None:
         if isinstance(additional_architecture_default_modules, (tuple, list)):
-            default_module = MultiModule(default_module, *additional_architecture_default_modules)
+            if default_module is not None:
+                default_module = MultiModule(default_module, *additional_architecture_default_modules)
+            else:
+                default_module = MultiModule(*additional_architecture_default_modules)
         else: 
-            default_module = MultiModule(default_module, additional_architecture_default_modules)
+            if default_module is not None:
+                default_module = MultiModule(default_module, additional_architecture_default_modules)
+            else:
+                default_module = additional_architecture_default_modules
     ignore_params = list(missing_kwargs.keys()) if missing_kwargs else None
     uninitialized_model = prep_class_from_config(
         prompt=prompt, 

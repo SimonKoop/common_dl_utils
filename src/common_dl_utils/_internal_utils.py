@@ -59,7 +59,7 @@ def make_union_type_check(type_check:Callable, allow_none=True, aggregate_auxili
 
 def make_list_or_tuple_type_check(type_check:Callable):
     def list_or_tuple_type_check(annotation):
-        """check if the annotation is either list[T], tuple[T], or T, where type_check(T) is True
+        """check if the annotation is either list[T], tuple[T, ...], or T, where type_check(T) is True
         Additionally check whether the annotation is actually list/tuple or not
 
         :param annotation: _description_
@@ -69,7 +69,7 @@ def make_list_or_tuple_type_check(type_check:Callable):
         if origin not in (list, tuple):
             return type_check(annotation), False
         # if we get here, the annotation is a list or tuple
-        return all(type_check(arg) for arg in get_args(annotation)), True
+        return all(type_check(arg) for arg in get_args(annotation) if arg is not Ellipsis), True
     return list_or_tuple_type_check
 
 def make_general_type_check(type_check:Callable, allow_none=True, aggregate_auxiliaries=any):
