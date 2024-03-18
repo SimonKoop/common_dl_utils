@@ -235,10 +235,16 @@ def maybe_add_key(key, keys, config):
     if has_index(config, key) and key not in keys:
         keys.append(key)
 
+class _AbsenceToken:
+    def __repr__(self):
+        return "AbsenceToken"
+    def __str__(self):
+        return "AbsenceToken"
+
 def generalized_getattr(
         obj:Any, 
         attr:Union[str, tuple[str], list[str]],
-        default:Any=None,
+        default:Any=_AbsenceToken(),
         strict: bool=False
         ):
     """ 
@@ -246,26 +252,35 @@ def generalized_getattr(
     :param obj: object to get attribute from
     :param attr: (path to) attribute to get from obj
     :param default: default value to return if attribute is not found
+        by default, an _AbsenceToken is used to indicate that no default was provided
+        if no default is provided, an AttributeError will be raised if the attribute is not found.
     :param strict: if True, raise an AttributeError if any earlier part of the path refers to a non existing attribute
         e.g. attempting to get a.b.c as generalized_getattr(a, 'b.c', strict=True) will raise an AttributeError if a.b does not exist
         On the other hand attempting to get a.b.c as generalized_getattr(a, 'b.c', strict=True) will return default if a.b.c does not exist but a.b. does, even if strict is True
-    :raises AttributeError: if strict is True and an intermediate attribute is not found
-    :return: the attribute if it exists, otherwise default
+    :raises AttributeError: if strict is True and an intermediate attribute is not found or if the attribute is not found and no default is provided
+    :return: the attribute if it exists, otherwise default if provided (otherwise an AttributeError is raised)
     """
     dotted_path = attr.split('.') if isinstance(attr, str) else attr
     if len(dotted_path) == 1:
+        if isinstance(default, _AbsenceToken):
+            return getattr(obj, dotted_path[0])
         return getattr(obj, dotted_path[0], default)
     else:
         if not hasattr(obj, dotted_path[0]):
-            if strict:
+            if strict or isinstance(default, _AbsenceToken):
                 raise AttributeError(f"{obj=} does not have attribute {dotted_path[0]}")
             else:
                 return default
-        return generalized_getattr(
-            getattr(obj, dotted_path[0]), 
-            dotted_path[1:],
-            default,
-            strict
+        try:
+            return generalized_getattr(
+                getattr(obj, dotted_path[0]), 
+                dotted_path[1:],
+                default,
+                strict
+                )
+        except AttributeError as e:
+            raise AttributeError(
+                f"generalized_getattr cannot get {attr=} from {obj=} with {default=} and {strict=}.\n    Exception raised was: {e}"
             )
 
 def process_prompt(
