@@ -216,30 +216,31 @@ class PostponedInitialization:
         """
         is_complete recursively checks whether all arguments have been resolved
         """
-        no_missing_args = not self.missing_args
-        all_simple_children_complete = all(child.is_complete() for child in self.kwargs.values() if isinstance(child, PostponedInitialization))
-        all_list_or_tuple_children_complete = all(
-            all(
-                element.is_complete() 
-                for element in child if isinstance(element, PostponedInitialization)
-            )
-            for child in self.kwargs.values() 
-            if isinstance(child, (list, tuple))
-        )
-        return no_missing_args and all_simple_children_complete and all_list_or_tuple_children_complete
-
-def maybe_add_key(key, keys, config):
-    """ 
-    add key to keys if it isn't already in there and it is a valid index for config
-    """
-    if has_index(config, key) and key not in keys:
-        keys.append(key)
+        if self.missing_args:
+            return False
+        
+        for child in self.kwargs.values():
+            if isinstance(child, PostponedInitialization):
+                if not child.is_complete():
+                    return False
+                continue
+            if not isinstance(child, (list, tuple)):
+                continue
+            if any(
+                not element.is_complete()
+                for element in child
+                if isinstance(element, PostponedInitialization)
+            ):
+                return False
+        return True
+    
 
 class _AbsenceToken:
     def __repr__(self):
         return "AbsenceToken"
     def __str__(self):
         return "AbsenceToken"
+
 
 def generalized_getattr(
         obj:Any, 
@@ -575,6 +576,13 @@ def prep_class_from_extended_prompt(
     )
     return postponed_init
 
+def maybe_add_key(key, keys, config):
+    """ 
+    add key to keys if it isn't already in there and it is a valid index for config
+    """
+    if has_index(config, key) and key not in keys:
+        keys.append(key)
+
 def _get_updated_keys(
         keys: Union[None, list],
         current_key:Union[None, str, tuple[str]],
@@ -878,7 +886,109 @@ def get_callable_or_prep_class_from_extended_prompt(
     return get_callable_from_extended_prompt(extended_prompt, default_module=default_module)
 
 
-def match_signature_from_config(
+def match_signature_from_config_new(
+        signature: inspect.Signature,
+        config: Mapping,
+        keys: Union[None, list],
+        registry:list = type_registry,
+        default_module:Union[None, ModuleType, str] = None,
+        new_key_postfix:str = '_config',
+        new_key_base_from_param_name:bool = False,
+        ignore_params:Union[None, tuple[str], list[str]] = None,
+        )->tuple[Mapping, list]:
+    """ 
+    :param signature: the call signature to be matched
+    :param config: the config to pull the values from
+    :param keys: (optional) potential children of config where values may be retrieved from. 
+        Righter most is processed last.
+        If B is processed after A, B can overrule the values in A. 
+        A key can either be a string or a tuple of strings
+        in case of a tuple of strings, it's treated as config[key[0]][key[1]]...
+    :param registry: list of types that require initialization (or just calling) based on config before being returned
+    :param default_module: optionally the default module from which to get classes if the prompt only specifies a class name
+        either an actual module, 
+        or a path to a module
+    :param new_key_postfix: string used for finding names of subconfigs 
+    :param new_key_base_from_param_name: if True, uses the parameter name to look for sub-configs instead of the class name
+    :param ignore_params: optional collection of parameter names to be ignored in the process (will be added to missing_args)
+    :returns: a dictionary with the relevant keyword-value pairs for the signature pulled from config and a list of missing arguments
+        NB any classes in registry remain un-initialized PostponedInitialization instances that can be realized by calling the initialize() method
+    """
+    keys = keys or []
+    ignore_params = list(ignore_params) if ignore_params is not None else []
+    # we go in the reverse order compared to the old function
+    # this should speed things up significantly for complex cases
+
+    resolved_kwargs = {}
+    missing_args = [
+        name for name, parameter in signature.parameters.items()
+        if parameter.kind is not parameter.VAR_KEYWORD
+    ]
+    # we start with highest priority
+    for key in reversed(keys):
+        if has_index(config, key):
+            sub_config = get_from_index(config, key)
+            kwargs_update = _get_kwargs_update(
+                signature=signature,
+                config=config,
+                registry=registry,
+                default_module=default_module,
+                keys=keys,
+                sub_config=sub_config,
+                current_key=key,
+                new_key_postfix=new_key_postfix,
+                new_key_base_from_param_name=new_key_base_from_param_name,
+                ignore_params=ignore_params + list(resolved_kwargs.keys())
+            )
+            if not kwargs_update:
+                continue
+            #assert not any(name in resolved_kwargs for name in kwargs_update), f"Overlapping keys in {resolved_kwargs=}\nand {kwargs_update=}\nwith {missing_args=}\nfor {signature=} and {key=}"
+            #assert all(name in missing_args for name in kwargs_update), f"incorrect missing_args for {signature=}:\n{missing_args=},\n{kwargs_update=},\n{resolved_kwargs=}\nfor {key=}"
+            resolved_kwargs.update(kwargs_update)
+            missing_args = [
+                name for name in missing_args if name not in kwargs_update
+            ]
+            # if we're done, we're done
+            if all(name in ignore_params for name in missing_args):
+                return resolved_kwargs, missing_args
+    
+    # now we update the kwargs based on the base config
+    kwargs_update = _get_kwargs_update(
+            signature=signature, 
+            config=config, 
+            registry=registry, 
+            default_module=default_module, 
+            keys=keys, 
+            new_key_postfix=new_key_postfix,
+            new_key_base_from_param_name=new_key_base_from_param_name,
+            ignore_params=ignore_params + list(resolved_kwargs.keys())
+            )
+    #assert not any(name in resolved_kwargs for name in kwargs_update), f"Overlapping keys in {resolved_kwargs=}\nand {kwargs_update=}\nwith {missing_args=}\nfor {signature=} while updating from base config"
+    #assert all(name in missing_args for name in kwargs_update), f"incorrect missing_args for {signature=}:\n{missing_args=},\n{kwargs_update=},\n{resolved_kwargs=} while updating from base config"
+    resolved_kwargs.update(kwargs_update)
+    missing_args = [
+        name for name in missing_args if name not in kwargs_update
+    ]
+
+    # again, see if we're done
+    if all(name in ignore_params for name in missing_args):
+        return resolved_kwargs, missing_args
+    
+    # now we use the default arguments in the signature to hopefully fill in the rest
+    kwargs_update = {
+        param_name: signature.parameters[param_name].default
+        for param_name in missing_args
+        if (param_name not in ignore_params
+        and signature.parameters[param_name].default is not signature.parameters[param_name].empty)
+    }
+    resolved_kwargs.update(kwargs_update)
+    missing_args = [
+        name for name in missing_args if name not in kwargs_update
+    ]
+    return resolved_kwargs, missing_args
+
+
+def match_signature_from_config_old(
         signature: inspect.Signature,
         config: Mapping,
         keys: Union[None, list],
@@ -964,6 +1074,23 @@ def match_signature_from_config(
 
     return kwargs, missing_args
 
+match_signature_from_config = match_signature_from_config_new
+
+def use_old_msfc():
+    """ 
+    Use the old (pre version 0.0.12) algorithm for match_signature_from_config
+    """
+    global match_signature_from_config
+    match_signature_from_config = match_signature_from_config_old
+
+def use_new_msfc():
+    """ 
+    Use the new (in version 0.0.12) algorithm for match_signature_from_config
+    This only needs to be called if use_old_msfc has been called before, as the new
+    algorithm is the default
+    """
+    global match_signature_from_config
+    match_signature_from_config = match_signature_from_config_new
 
 def _get_kwargs_update(
         signature, 
