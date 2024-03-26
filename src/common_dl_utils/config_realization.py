@@ -110,7 +110,7 @@ from typing import Union, Callable, Any, Mapping
 from types import ModuleType
 from common_dl_utils.type_registry import type_registry, is_in_registry
 from common_dl_utils.module_loading import load_from_path, MultiModule
-from common_dl_utils.trees import get_from_index, has_index, tree_map
+from common_dl_utils.trees import get_from_index, has_index, tree_map, get_items_of_interest
 import common_dl_utils._internal_utils as _internal_utils
 from collections.abc import Iterable
 from functools import partial
@@ -925,32 +925,50 @@ def match_signature_from_config_new(
         if parameter.kind is not parameter.VAR_KEYWORD
     ]
     # we start with highest priority
+    valid_keys = None  # only create if needed for a user warning
     for key in reversed(keys):
-        if has_index(config, key):
-            sub_config = get_from_index(config, key)
-            kwargs_update = _get_kwargs_update(
-                signature=signature,
-                config=config,
-                registry=registry,
-                default_module=default_module,
-                keys=keys,
-                sub_config=sub_config,
-                current_key=key,
-                new_key_postfix=new_key_postfix,
-                new_key_base_from_param_name=new_key_base_from_param_name,
-                ignore_params=ignore_params + list(resolved_kwargs.keys())
-            )
-            if not kwargs_update:
-                continue
-            #assert not any(name in resolved_kwargs for name in kwargs_update), f"Overlapping keys in {resolved_kwargs=}\nand {kwargs_update=}\nwith {missing_args=}\nfor {signature=} and {key=}"
-            #assert all(name in missing_args for name in kwargs_update), f"incorrect missing_args for {signature=}:\n{missing_args=},\n{kwargs_update=},\n{resolved_kwargs=}\nfor {key=}"
-            resolved_kwargs.update(kwargs_update)
-            missing_args = [
-                name for name in missing_args if name not in kwargs_update
-            ]
-            # if we're done, we're done
-            if all(name in ignore_params for name in missing_args):
-                return resolved_kwargs, missing_args
+        if not has_index(config, key):
+            valid_keys = [
+                path for path, value in get_items_of_interest(config, is_value_of_interest=lambda x: True)
+                if all(isinstance(part, str) for part in path)  # lists and tuples in the config do not specify sub configs
+                if isinstance(value, Mapping)  # we only care about keys to sub-configs mappings
+            ] if valid_keys is None else valid_keys
+            warnings.warn(f"Non-existing key {key} provided for config. Valid sub-config keys are {valid_keys}.")
+            continue
+
+        sub_config = get_from_index(config, key)
+        if not isinstance(sub_config, Mapping):
+            valid_keys = [
+                path for path, value in get_items_of_interest(config, is_value_of_interest=lambda x: True)
+                if all(isinstance(part, str) for part in path)  # lists and tuples in the config do not specify sub configs
+                if isinstance(value, Mapping)  # we only care about keys to sub-configs mappings
+            ] if valid_keys is None else valid_keys
+            warnings.warn(f"Provided key {key} does not lead to a sub-config of config. Valid sub-config keys are {valid_keys}.")
+            continue
+        
+        kwargs_update = _get_kwargs_update(
+            signature=signature,
+            config=config,
+            registry=registry,
+            default_module=default_module,
+            keys=keys,
+            sub_config=sub_config,
+            current_key=key,
+            new_key_postfix=new_key_postfix,
+            new_key_base_from_param_name=new_key_base_from_param_name,
+            ignore_params=ignore_params + list(resolved_kwargs.keys())
+        )
+        if not kwargs_update:
+            continue
+        #assert not any(name in resolved_kwargs for name in kwargs_update), f"Overlapping keys in {resolved_kwargs=}\nand {kwargs_update=}\nwith {missing_args=}\nfor {signature=} and {key=}"
+        #assert all(name in missing_args for name in kwargs_update), f"incorrect missing_args for {signature=}:\n{missing_args=},\n{kwargs_update=},\n{resolved_kwargs=}\nfor {key=}"
+        resolved_kwargs.update(kwargs_update)
+        missing_args = [
+            name for name in missing_args if name not in kwargs_update
+        ]
+        # if we're done, we're done
+        if all(name in ignore_params for name in missing_args):
+            return resolved_kwargs, missing_args
     
     # now we update the kwargs based on the base config
     kwargs_update = _get_kwargs_update(
