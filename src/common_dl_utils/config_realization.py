@@ -332,7 +332,6 @@ def process_prompt(
         # in notebooks directly, and you want to just feed classes and functions
         # to all the mechanics
         # TODO see if more documentation needs to be updated with this
-        # this now also happens when a class requires a callable as an argument (e.g. activation function choice)
         cls = prompt
         class_name = cls.__name__
     else:

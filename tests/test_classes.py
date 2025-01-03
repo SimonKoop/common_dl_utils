@@ -58,3 +58,11 @@ class TestType5(BaseTestType):
         return f"TestType5(a={str(self.a)}, b={str(self.b)}, c={str(self.c)}, d={str(self.d)})"
     def __repr__(self):
         return str(self)
+    
+@dataclass
+class TestType6(BaseTestType):
+    maybe_sub_model: Union[Callable[[int], int], TestType1]
+
+
+def test_function(x:int)->int:
+    return x

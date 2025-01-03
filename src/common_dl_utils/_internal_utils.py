@@ -1,9 +1,11 @@
 import os
 import warnings
 from typing import Any, Union, get_origin, get_args, Callable, Mapping
-from common_dl_utils.type_registry import is_in_registry, type_registry
 import functools
 import inspect
+import collections
+
+from common_dl_utils.type_registry import is_in_registry, type_registry
 
 NoneType = type(None)
 
@@ -30,10 +32,11 @@ def annotation_is_callable_or_type(annotation):
         # issubclass(typing.Union, type) will raise a TypeError, but isinstance(typing.Union, type) is False, 
         # so issubclass will never be called
         return True
-    return annotation in (callable, Callable, 'callable', 'Callable', 'type')  # maybe remove string checks as we don't support them anywhere else 
+    return annotation in (callable, Callable, collections.abc.Callable, 'callable', 'Callable', 'type')  # maybe remove string checks as we don't support them anywhere else 
 
 def annotation_is_registry_element_or_callable(annotation, registry=type_registry):
-    return is_in_registry(annotation, registry=registry) or (annotation in (callable, Callable, 'callable', 'Callable'))
+    annotation = get_origin(annotation) or annotation
+    return is_in_registry(annotation, registry=registry) or (annotation in (callable, Callable, collections.abc.Callable, 'callable', 'Callable'))
 
 def make_union_type_check(type_check:Callable, allow_none=True, aggregate_auxiliaries=any):
     """make a type check for a Union of types, where type_check is a type check for the individual types
@@ -41,7 +44,7 @@ def make_union_type_check(type_check:Callable, allow_none=True, aggregate_auxili
     :param type_check: a function that takes an annotation and returns whether it is of a type we're interested in
         this function may also return some auxiliary (boolean) information e.g. whether we may be dealing with a list of types
     :param allow_none: whether to allow None in the Union, defaults to True
-    :param aggregate_auxiliaries: function ao aggregate the auxiliary information from the type checks in case of a Union, defaults to any
+    :param aggregate_auxiliaries: function to aggregate the auxiliary information from the type checks in case of a Union, defaults to any
     :returns: a function that takes an annotation and returns whether it is a Union of types that satisfy type_check, and possibly some auxiliary information
     """
     def union_type_check(annotation):
