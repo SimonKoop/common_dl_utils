@@ -20,6 +20,7 @@ class MetricFrequency(Enum):
     EVERY_EPOCH = 'every_epoch'
     EVERY_N_BATCHES = 'every_n_batches'
     EVERY_N_EPOCHS = 'every_n_epochs'
+    AFTER_TRAINING = 'after_training'
 
 @register_type
 class Metric(abc.ABC):
@@ -74,6 +75,11 @@ class MetricCollector:
             metric for metric in self.metrics
             if metric.frequency.value == MetricFrequency.EVERY_N_EPOCHS.value
         ]
+
+        self.after_training = [
+            metric for metric in self.metrics
+            if metric.frequency.value == MetricFrequency.AFTER_TRAINING.value
+        ]
         
         self._step = 0
         self._epoch = 1
@@ -86,6 +92,10 @@ class MetricCollector:
             self.required_kwargs_on_epoch_end = set.union(*[metric.required_kwargs for metric in self.on_every_epoch + self.on_every_n_epochs])
         else:
             self.required_kwargs_on_epoch_end = set()
+        if self.after_training:
+            self.required_kwargs_on_training_end = set.union(*[metric.required_kwargs for metric in self.after_training])
+        else:
+            self.required_kwargs_on_training_end = set()
 
     def on_batch_end(self, **kwargs):
         """
@@ -138,9 +148,21 @@ class MetricCollector:
         self._epoch += 1
         self._step = 0
         return results
+    
+    def on_training_end(self, **kwargs):
+        """ 
+        Compute and report metrics after finishing training
+        :param kwargs: keyword arguments to be passed to the metrics
+            these depend on the metrics
+        :return: dictionary of metric names and values
+        """
+        results = {}
+        for metric in self.after_training:
+            results.update(metric.compute(**kwargs))
+        return results
 
     def __repr__(self):
-        return f'MetricCollector(on_every_batch={self.on_every_batch}, on_every_epoch={self.on_every_epoch}, on_every_n_batches={self.on_every_n_batches}, on_every_n_epochs={self.on_every_n_epochs}, batch_frequency={self.batch_frequency}, epoch_frequency={self.epoch_frequency}, required_kwargs_on_batch_end={self.required_kwargs_on_batch_end}, required_kwargs_on_epoch_end={self.required_kwargs_on_epoch_end})'
+        return f'MetricCollector(on_every_batch={self.on_every_batch}, on_every_epoch={self.on_every_epoch}, on_every_n_batches={self.on_every_n_batches}, on_every_n_epochs={self.on_every_n_epochs}, batch_frequency={self.batch_frequency}, after_training={self.after_training}, epoch_frequency={self.epoch_frequency}, required_kwargs_on_batch_end={self.required_kwargs_on_batch_end}, required_kwargs_on_epoch_end={self.required_kwargs_on_epoch_end}, required_kwargs_on_training_end={self.required_kwargs_on_training_end})'
 
 
 def add_prefix_to_dictionary_keys(dictionary:dict, prefix:str, excluded_keys:Union[tuple, set, list]=('epoch', 'batch_within_epoch'))->dict:
