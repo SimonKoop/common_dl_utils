@@ -174,3 +174,10 @@ def add_prefix_to_dictionary_keys(dictionary:dict, prefix:str, excluded_keys:Uni
 def update_history(history, updates):
     for key in history:
         history[key].append(updates[key])
+
+def initialize_history(updates:dict):
+    return {
+        key: [value]
+        for key, value in updates.items()
+    }
+
