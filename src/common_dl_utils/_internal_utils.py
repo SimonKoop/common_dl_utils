@@ -1,6 +1,11 @@
 import os
 import warnings
 from typing import Any, Union, get_origin, get_args, Callable, Mapping
+import sys
+if sys.version_info.minor >= 10:
+    from types import UnionType
+else:
+    UnionType = Union
 import functools
 import inspect
 import collections
@@ -49,7 +54,7 @@ def make_union_type_check(type_check:Callable, allow_none=True, aggregate_auxili
     """
     def union_type_check(annotation):
         origin = get_origin(annotation)
-        if origin != Union:
+        if origin not in (Union, UnionType):
             return type_check(annotation) or (annotation in (NoneType, None) and allow_none)
         results = [type_check(arg) for arg in get_args(annotation)]
         if isinstance(results[0], bool):

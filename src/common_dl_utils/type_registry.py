@@ -28,6 +28,11 @@ But on the other hand, the some_parameter int should just be pulled from the con
 So this type registry is used to specify which types are initialized, and which don't need to be initialized
 """
 from typing import Union, get_origin, get_args, ForwardRef
+import sys
+if sys.version_info.minor >= 10:
+    from types import UnionType
+else:
+    UnionType = Union
 import warnings
 from functools import wraps
 
@@ -72,7 +77,7 @@ def contains(cls_spec, registry=type_registry):
     :return: whether the cls_spec is considered to be in the registry
     """
     origin = get_origin(cls_spec)
-    if origin is Union:
+    if origin in (Union, UnionType):
         # if cls_spec is Union[type_1, type_2, ...], check if any of these types are in the registry
         # the elements of the union can be found in typing.get_args(cls_spec) (of cls_spec.__args__)
         # This can likely be done in a nicer way in later Python versions, but in 3.9, you'll get a

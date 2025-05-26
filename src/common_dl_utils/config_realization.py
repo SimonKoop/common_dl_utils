@@ -199,7 +199,7 @@ class PostponedInitialization:
     def __str__(self) -> str:
         return self.__repr__()
     
-    def resolve_missing_args(self, resolution:Union[Mapping, 'PostponedInitialization'], allow_different_class:bool=True):
+    def resolve_missing_args(self, resolution:Union[Mapping, 'PostponedInitialization'], allow_different_class:bool=True)->None:
         # set allow_different_class to be true by default so this can work with wrapped classes and methods etc. too
         if isinstance(resolution, PostponedInitialization):
             if self.cls is not resolution.cls and not allow_different_class:
@@ -211,6 +211,18 @@ class PostponedInitialization:
             if arg_name in self.missing_args:
                 self.missing_args.remove(arg_name)
                 self.kwargs[arg_name] = resolution[arg_name]
+    
+    def resolve_recursively(self, resolution:Mapping)->None:
+        self.resolve_missing_args(resolution)
+        for child in self.kwargs.values():
+            if isinstance(child, PostponedInitialization):
+                child.resolve_recursively(resolution)
+            elif not isinstance(child, (list, tuple)):
+                continue
+            else:
+                for element in child:
+                    if isinstance(element, PostponedInitialization):
+                        element.resolve_recursively(resolution)
 
     def is_complete(self)-> bool:
         """
