@@ -235,13 +235,13 @@ def wandb_process_variable_token(token: _VariableToken):
             return_value['value'] = token.values[0]
     return return_value
 
-def wandb_process_fixed_value(value):
-    return {'value': value}
+def wandb_process_fixed_value(value, is_for_sweep:bool=True):
+    return {'value': value} if is_for_sweep else value
 
 # for working with wandb sweeps, we want the configs to be flat
 # but nested configs can be useful for keeping things tidy and using the same parameter name (such as 'hidden_size') in multiple places without conflicts
 # so the following functions are here to bridge the gap between flat and nested configs 
-def make_flat_config(container, path_sep='__', variables_only=False):
+def make_flat_config(container, path_sep='__', variables_only=False, is_for_sweep:bool=True):
     """ 
     make a flat config dict compatible with wandb out of the (meta data of) the collected variables
 
@@ -249,6 +249,7 @@ def make_flat_config(container, path_sep='__', variables_only=False):
     :param path_sep: character used to separate indices of nested dicts
     :param variables_only: if True, we generate a config containing only the variables
         if False, we add all the fixed values to the wandb config too
+    :param is_for_sweep: bool, if True, value is added as {'value': value}
 
     NB will not work for _VariableTokens containing sub-configs 
     """
@@ -267,7 +268,7 @@ def make_flat_config(container, path_sep='__', variables_only=False):
             if isinstance(value, _VariableToken):
                 return_value[path] = wandb_process_variable_token(value)
             else: 
-                return_value[path] = wandb_process_fixed_value(value)
+                return_value[path] = wandb_process_fixed_value(value, is_for_sweep=is_for_sweep)
         return return_value
     
 def _add_to_container(key: str, container: Union[List, Config, Dict], value: Any):
