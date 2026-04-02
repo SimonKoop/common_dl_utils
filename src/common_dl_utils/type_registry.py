@@ -27,7 +27,7 @@ But on the other hand, the some_parameter int should just be pulled from the con
 
 So this type registry is used to specify which types are initialized, and which don't need to be initialized
 """
-from typing import Union, get_origin, get_args, ForwardRef
+from typing import Union, get_origin, get_args
 import sys
 if sys.version_info.minor >= 10:
     from types import UnionType

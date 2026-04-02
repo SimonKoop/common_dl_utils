@@ -30,10 +30,9 @@ def _is_python_file(path):
     options = ('.py', '.pyc', )
     return any(path.endswith(option) for option in options)
 
-def load_from_path(name, path, register_in_sys_modules=False):
+def load_from_path(path, register_in_sys_modules=False):
     """load_from_path load a module from a path
 
-    :param name: name to be given to the module
     :param path: path to the module that is to be loaded (can be either absolute or relative)
     :param register_in_sys_modules: whether to add the resulting module to sys.modules under name, defaults to False
     :raises ModuleNotFoundError: if path does not point to a python file or directory with __init__.py(c)
@@ -46,6 +45,11 @@ def load_from_path(name, path, register_in_sys_modules=False):
     # first check if path exists
     if not os.path.exists(path):
         raise ModuleNotFoundError(f"Could not find {path=}")
+    
+    # get the proper module name because otherwise we get errors with modules that do relative imports
+    _, name = os.path.split(path)
+    name = name.split(".")[0] or name.split(".")[1]  # in case the filename or directory name starts with a ".", take the second component
+
     
     # if path exists but is not a .py or .pyc file, see if it is a directory with a __init__.py file
     if not _is_python_file(path):
@@ -74,7 +78,7 @@ def make_full_path(path):
     return path
 
 
-def get_module_from_config(config, key, default, name=None):
+def get_module_from_config(config, key, default):
     """
     Load a module from config[key] if config contains key,
     otherwise use default
@@ -91,10 +95,7 @@ def get_module_from_config(config, key, default, name=None):
     else:
         path = config[key]
 
-    if name is None:
-        name = key
-
-    return load_from_path(name, path)
+    return load_from_path(path)
 
 class MultiModule(types.ModuleType):
     """ 

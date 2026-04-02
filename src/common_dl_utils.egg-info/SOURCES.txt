@@ -12,5 +12,6 @@ src/common_dl_utils/type_registry.py
 src/common_dl_utils.egg-info/PKG-INFO
 src/common_dl_utils.egg-info/SOURCES.txt
 src/common_dl_utils.egg-info/dependency_links.txt
+src/common_dl_utils.egg-info/requires.txt
 src/common_dl_utils.egg-info/top_level.txt
 tests/test_classes.py

@@ -135,7 +135,8 @@ __all__ = [
 # common types
 Prompt = Union[tuple[str, str], list[str, str], str, Callable, None]
 ExtendedPrompt = Union[tuple[str, str, Mapping], list[str, str, Mapping], tuple[str, Mapping], list[str, Mapping], tuple[Callable, Mapping], list[Callable, Mapping], Prompt]
-Prompt.__doc__ = """
+try:
+    Prompt.__doc__ = """
 Prompt (type alias)
 either a string specifying the name of some object in some default_module
 or a tuple/list of two strings, 
@@ -144,7 +145,7 @@ or a tuple/list of two strings,
 or a callable to be used directly
 or None if this is for an optional argument
 """
-ExtendedPrompt.__doc__ = """
+    ExtendedPrompt.__doc__ = """
 ExtendedPrompt (type alias)
 Either a Prompt (see Prompt) or one of the following:
     a tuple/list with one or two strings and a Mapping
@@ -154,6 +155,9 @@ Either a Prompt (see Prompt) or one of the following:
     a tuple/list with a Callable and a Mapping
         the Mapping is again a local_config for the Callable
 """
+except AttributeError:
+    # the above no longer works in python 3.14
+    pass
 
 
 class PostponedInitialization:
@@ -337,7 +341,7 @@ def process_prompt(
         if default_module is None:
             raise ValueError(f"missing path or class name in {prompt=} in absence of a default module")
         class_name = prompt
-        module = default_module if isinstance(default_module, ModuleType) else load_from_path('default_module', default_module)
+        module = default_module if isinstance(default_module, ModuleType) else load_from_path(default_module)
         cls = generalized_getattr(module, class_name)
     elif callable(prompt):  
         # mostly useful for when you're using this to create models
@@ -348,7 +352,7 @@ def process_prompt(
         class_name = cls.__name__
     else:
         path, class_name = prompt 
-        module = load_from_path('_temp_module', path)
+        module = load_from_path(path)
         cls = generalized_getattr(module, class_name)
 
     # in case of dotted path, make the class_name the first part of said path
@@ -1194,12 +1198,12 @@ def get_model_from_config(
     """
     missing_kwargs = missing_kwargs or {}
     prompt = config[model_prompt]
-    default_module = load_from_path(name="architecture", path=config[default_module_key]) if default_module_key is not None else None
+    default_module = load_from_path(path=config[default_module_key]) if default_module_key is not None else None
     if add_model_module_to_architecture_default_module:
         if not isinstance(prompt, (tuple, list)):
             raise ValueError(f"if {add_model_module_to_architecture_default_module=} is True, {model_prompt=} should be a tuple or list of length 2 so as to specify the path of the model module")
         model_module_path = prompt[0]
-        model_module = load_from_path(name="model_module", path=model_module_path)
+        model_module = load_from_path(path=model_module_path)
         default_module = MultiModule(default_module, model_module) if default_module is not None else model_module
     if additional_architecture_default_modules is not None:
         if isinstance(additional_architecture_default_modules, (tuple, list)):

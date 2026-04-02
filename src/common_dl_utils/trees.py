@@ -25,20 +25,30 @@ __all__ = [
 NonLeafTree = Union[tuple, list, Mapping]
 Tree = Union[NonLeafTree, Any]
 GeneralIndex = Union[int, str, list[Union[int, str]], tuple[Union[int, str]]]
-NonLeafTree.__doc__ = """
+
+NonLeafTree__doc__ = """
 A Tree that is not a leaf. I.e. a composition of lists, tuples, and dicts (or other Mappings) containing leaves (anything else).
 Example {1: [2, 3, 4], 5: {6: 7, 8: 9}} is a NonLeafTree
 """
-Tree.__doc__ = """
+Tree__doc__ = """
 Either a leaf (anything) or a composition of lists, tuples, and dicts (or other Mappings) containing leaves.
 """
-GeneralIndex.__doc__ = """
+GeneralIndex__doc__ = """
 A (multi) index into a NonLeafTree.
 A regular index is assumed to be an int or str
 A multi-index is assumed to be a list or tuple of regular indices
 E.g. 1, 'a', [1, 'a'], and (1, 'a') may all be valid GeneralIndices
 E.g. in the tree [1, {'a':2, 'b':(1, 2, 3)}], the index (1, 'b', 2) points to the leaf 3
 """
+try:
+    
+    NonLeafTree.__doc__ = NonLeafTree__doc__
+    Tree.__doc__ = Tree__doc__
+    GeneralIndex.__doc__ = GeneralIndex__doc__
+except AttributeError:  
+    # python 3.14 on decided to make this read only
+    pass
+
 
 def get_from_index(tree:NonLeafTree, index: GeneralIndex):
     """ 
