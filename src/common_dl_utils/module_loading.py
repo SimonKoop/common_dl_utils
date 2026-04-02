@@ -2,6 +2,7 @@ import importlib
 import os
 import types
 import sys
+import pathlib
 
 __all__ = [
     "load_from_path",
@@ -26,11 +27,11 @@ def load_from_path_old(name, path):
     return importlib.machinery.SourceFileLoader(name, make_full_path(path)).load_module()
 
 
-def _is_python_file(path):
+def _is_python_file(path:pathlib.Path):
     options = ('.py', '.pyc', )
-    return any(path.endswith(option) for option in options)
+    return path.suffix in options
 
-def load_from_path(path, register_in_sys_modules=False):
+def load_from_path(path:str, register_in_sys_modules:bool=False):
     """load_from_path load a module from a path
 
     :param path: path to the module that is to be loaded (can be either absolute or relative)
@@ -42,6 +43,7 @@ def load_from_path(path, register_in_sys_modules=False):
 
     NB contrary to load_from_path_old, this does not modify existing modules that are loaded under the same name
     """
+    path = pathlib.Path(path)
     # first check if path exists
     if not os.path.exists(path):
         raise ModuleNotFoundError(f"Could not find {path=}")
@@ -75,8 +77,8 @@ def load_from_path(path, register_in_sys_modules=False):
 
 def make_full_path(path):
     """make a potentially relative path a full path"""
-    if path[0] == "./":
-        return f"{os.getcwd()}/{path[2:]}"
+    if path.startswith("./"):
+        return os.path.join(os.getcwd(), path[2:])
     return path
 
 
