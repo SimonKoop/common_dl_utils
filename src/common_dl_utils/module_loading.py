@@ -47,8 +47,10 @@ def load_from_path(path, register_in_sys_modules=False):
         raise ModuleNotFoundError(f"Could not find {path=}")
     
     # get the proper module name because otherwise we get errors with modules that do relative imports
-    _, name = os.path.split(path)
-    name = name.split(".")[0] or name.split(".")[1]  # in case the filename or directory name starts with a ".", take the second component
+    _, name_base = os.path.split(path)
+    name = name_base.split(".")[0]
+    if not name:
+        name = name_base.split(".")[1]  # in case the filename or directory name starts with a ".", take the second component
 
     
     # if path exists but is not a .py or .pyc file, see if it is a directory with a __init__.py file
